@@ -9,10 +9,18 @@ Displays the current allow list, collects new domain entries interactively, conf
 before applying changes, and updates the tenant's AllowList accordingly. Exits early if no active
 Exchange Online session is detected.
 
+.PARAMETER CurrentAllowlist
+Displays the current AllowList and exits without prompting for new domains.
+
 .EXAMPLE
 PS C:\> .\Modify-OrgTrustedSenders.ps1
 
 Runs the script, checks for an active Exchange Online session, and prompts for domains to add.
+
+.EXAMPLE
+PS C:\> .\Modify-OrgTrustedSenders.ps1 -CurrentAllowlist
+
+Displays the current AllowList without prompting to add new domains.
 
 .INPUTS
 None. Domain entries are collected interactively via Read-Host.
@@ -29,7 +37,10 @@ https://learn.microsoft.com/powershell/module/exchange/set-externalinoutlook
 #>
 
 [CmdletBinding()]
-param()
+param(
+    # Switch param to list current allowlist instead of the addition loop
+    [switch]$CurrentAllowlist
+)
 
 # ----FUNCTIONS----
 
@@ -60,31 +71,39 @@ function Add-TrustedSender {
     Write-Host ($newDomains -join "`n")
 
     # Confirmation logic. Adds the new domain array to the allow list if "y". Exits the script if "n"    
-    $confirmMarker = Read-Host -Prompt "`nPlease confirm if this list is correct (y/n)"
-    switch($confirmMarker) {
-        "y" {
-            Write-Host "Adding new domains..."
-            Set-ExternalInOutlook -AllowList @{Add=$newDomains}
-            Write-Host "`nUpdated allowlist:" -ForegroundColor Cyan
-            Get-CurrentAllowlist
-        }
-        "n" {
-            Write-Host "Exiting..." -ForegroundColor Red
-            return
-        }
+    while ($true) {
+            $confirmMarker = Read-Host -Prompt "`nPlease confirm if this list is correct (y/n)"
+        switch($confirmMarker) {
+            "y" {
+                Write-Host "Adding new domains..."
+                Set-ExternalInOutlook -AllowList @{Add=$newDomains}
+                Write-Host "`nUpdated allowlist:" -ForegroundColor Cyan
+                Get-CurrentAllowlist
+                return
+            }
+            "n" {
+                Write-Host "Exiting..." -ForegroundColor Red
+                return
+            }
 
-        default {
-            Write-Host "Invalid option. Exiting..." -ForegroundColor Red
-            return
+            default {
+                Write-Host "Invalid option, please enter 'y' or 'n'." -ForegroundColor Red
+                
+            }
         }
     }
-}
+    }
 
 
 # ----MAIN----
 
 if (-not (Get-ConnectionInformation)) {
     Write-Host "Not connected to Exchange Online! Run Connect-ExchangeOnline and sign in with admin credentials to proceed." -ForegroundColor Red
+    exit
+}
+
+if ($CurrentAllowlist) {
+    Get-CurrentAllowlist
     exit
 }
 
