@@ -131,12 +131,18 @@ function Convert-PubFileToPDF {
             $app.Quit();
         }
     }
-
 }
+
+
+
 
 function Convert-PDFToWord {
     # Enumerate files specified by -Filter to build an array of target files
-    $files = Get-ChildItem *.pdf -File -Recurse:$Recurse;
+    $targetDir = Split-Path -Path $Filter -Parent
+    if (-not $targetDir) { $targetDir = "." }  # handles case where $Filter has no path, e.g. just "*.pub"
+    $pdfFilter = Join-Path -Path $targetDir -ChildPath "*.pdf"
+
+    $files = Get-ChildItem $pdfFilter -File -Recurse:$Recurse;
     if (-not $files) {
         Write-Error "No PDF files found.";
         exit 1;
@@ -158,53 +164,68 @@ function Convert-PDFToWord {
         exit 1;
     }
 
-    foreach ($file in $files) {
-        if ($file.Extension -eq ".pdf") {
-            $fileFullName = $file.FullName;
-            $docxFilePath = [System.IO.Path]::ChangeExtension($fileFullName, '.docx')
-            if (Test-Path $docxFilePath) {
-                Write-Error "Word file already exists: $docxFilePath";
-                Continue;
-            }
-
-            try {
-                $pdf = $wordApp.Documents.Open($fileFullName, $false); # False should turn off any conversion confirmation boxes but hasn't been working in testing.
-            }
-            catch {
-                # Write to error stream
-                Write-Error "Error opening file: $fileFullName $_";
-                Continue;
-            }
-
-            if (-not($pdf)) {
-                Write-Error "Failed opening file: $fileFullName";
-                Continue
-            }
-
-            try {
-                $pdf.SaveAs2($docxFilePath, [Microsoft.Office.Interop.Word.WdSaveFormat]::wdFormatDocumentDefault)
+    try {
+        foreach ($file in $files) {
+            if ($file.Extension -eq ".pdf") {
+                $fileFullName = $file.FullName;
+                $docxFilePath = [System.IO.Path]::ChangeExtension($fileFullName, '.docx')
                 if (Test-Path $docxFilePath) {
-                    Write-Output "Exported to $docxFilePath."
+                    Write-Error "Word file already exists: $docxFilePath";
+                    Continue;
+                }
+
+                try {
+                    $pdf = $wordApp.Documents.Open($fileFullName, $false); # False should turn off any conversion confirmation boxes but hasn't been working in testing.
+                }
+                catch {
+                    # Write to error stream
+                    Write-Error "Error opening file: $fileFullName $_";
+                    Continue;
+                }
+
+                if (-not($pdf)) {
+                    Write-Error "Failed opening file: $fileFullName";
+                    Continue
+                }
+
+                try {
+                    $pdf.SaveAs2($docxFilePath, [Microsoft.Office.Interop.Word.WdSaveFormat]::wdFormatDocumentDefault)
+                    if (Test-Path $docxFilePath) {
+                        Write-Output "Exported to $docxFilePath."
+                    }
+                    else {
+                        Write-Error "Failed to export file: $fileFullName"
+                    }
+                }
+                catch {
+                    # Write export error
+                    Write-Error "Error during export: $_"
+                }
+
+                $pdf.Close([Microsoft.Office.Interop.Word.WdSaveOptions]::wdDoNotSaveChanges)
+                if (Test-Path $fileFullName) {
+                    Write-Output "Removing unneeded PDF: $fileFullName"
+                    Remove-Item $fileFullName 
                 }
                 else {
-                    Write-Error "Failed to export file: $fileFullName"
+                    Write-Error "$fileFullName not found!"
                 }
             }
-            catch {
-                # Write export error
-                Write-Error "Error during export: $_"
-            }
+        }
 
-            $pdf.Close([Microsoft.Office.Interop.Word.WdSaveOptions]::wdDoNotSaveChanges)
-            Remove-Item $fileFullName
+    }
+    catch {
+        Write-Error $_
+    }
+    finally {
+        if ($wordApp) {
+            $wordApp.Quit()
         }
     }
-
-    if ($wordApp) {
-        # Quit Word
-        $wordApp.Quit()
-    }
+    
 }
+
+
 
 ## MAIN
 
@@ -214,18 +235,19 @@ if (-not $PSBoundParameters.ContainsKey('Filter')) {
     exit 1
 }
 
-# Checks for reg key disabling conversion confirmation boxes created by Word
+# Checks for registry subkey disabling conversion confirmation boxes created by Word. Adds the subkey if it's not there.
+# This subkey is important to prevent Word from stopping script execution by showing a popup saying that Word will convert PDFs to editable Word documents upon opening one later in the script.
 try {
     $regPath = "HKCU:\Software\Microsoft\Office\16.0\Word\Options"
     Write-Output "Disabling Word conversion confirmation boxes..."
 
     if (-not (Get-ItemProperty -Path $regPath -Name "DisableConvertPdfWarning" -ErrorAction SilentlyContinue)) {
-        New-ItemProperty -Path $regPath -Name "DisableConvertPdfWarning" -PropertyType DWord -Value 1 | out-null
+        New-ItemProperty -Path $regPath -Name "DisableConvertPdfWarning" -PropertyType DWord -Value 1 -ErrorAction Stop | out-null
     }
 }
 catch {
     # write error
-    Write-Error $_
+    Write-Error "Unable to write registry key. Office is likely not installed or inaccessible. `n Full error: $($Error[0])"
     exit 1
 }
 
